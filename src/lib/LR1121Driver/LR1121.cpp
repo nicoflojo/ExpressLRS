@@ -71,6 +71,7 @@ void LR1121Driver::End()
 bool LR1121Driver::CheckVersion(const SX12XX_Radio_Number_t radioNumber)
 {
     firmware_version_t version = GetFirmwareVersion(radioNumber);
+    DBGLN("radio #%d read: hw=%x type=%x ver=%x (want type=%x ver=%x)", radioNumber, version.hardware, version.type, version.version, LR1121_FIRMWARE_TYPE, LR11XX_FIRMWARE_VERSION);
     if (!LittleFS.exists("/lr1121.txt") && (version.type != LR1121_FIRMWARE_TYPE || version.version != LR11XX_FIRMWARE_VERSION))
     {
         DBGLN("Upgrading radio #%d", radioNumber);
@@ -123,6 +124,17 @@ bool LR1121Driver::Begin(uint32_t minimumFrequency, uint32_t maximumFrequency)
     //Clear Errors
     hal.WriteCommand(LR11XX_SYSTEM_CLEAR_ERRORS_OC, SX12XX_Radio_All); // Remove later?  Might not be required???
 
+    // --- TCXO support (OpenRX Mono/Gemini) ---
+    // These boards clock the LR1121 from a TCXO powered by the VTCXO pin (not a
+    // passive crystal). Stock ELRS assumes a crystal and never enables VTCXO, so
+    // the TCXO sits at 0V, there is no HF clock, and the radio detects over SPI
+    // (internal RC) but can never receive/transmit. SetTcxoMode powers VTCXO and
+    // switches XTA to external-clock input; a full self-calibration must follow
+    // because the reference oscillator has changed.
+    // tune = 0x07 (3.3V, matches the OW7EL89 supply); delay ~10ms in 30.52us steps.
+    uint8_t tcxobuf[4] = {0x07, 0x00, 0x01, 0x48};
+    hal.WriteCommand(LR11XX_SYSTEM_SET_TCXO_MODE_OC, tcxobuf, sizeof(tcxobuf), SX12XX_Radio_All);
+
 /*
 Do not enable for dual radio TX.
 When AUTOFS is set and tlm received by only 1 of the 2 radios,  that radio will go into FS mode and the other
@@ -153,6 +165,17 @@ transitioning from FS mode and the other from Standby mode. This causes the tx d
     CalImagebuf[0] = ((minimumFrequency / 1000000 ) - 1) / 4;       // Freq1 = floor( (fmin_mhz - 1)/4)
     CalImagebuf[1] = 1 + ((maximumFrequency / 1000000 ) + 1) / 4;   // Freq2 = ceil( (fmax_mhz + 1)/4)
     hal.WriteCommand(LR11XX_SYSTEM_CALIBRATE_IMAGE_OC, CalImagebuf, sizeof(CalImagebuf), SX12XX_Radio_All);
+
+#if defined(DEBUG_LOG)
+    // Diagnostic: read the LR1121 error register after init. Bits:
+    // 0=LF_RC_CALIB 1=HF_RC_CALIB 2=ADC_CALIB 3=PLL_CALIB 4=IMG_CALIB
+    // 5=HF_XOSC_START 6=LF_XOSC_START 7=PLL_LOCK  (a set bit = that step FAILED)
+    uint8_t errbuf[3] = {};
+    hal.WriteCommand(LR11XX_SYSTEM_GET_ERRORS_OC, SX12XX_Radio_1);
+    hal.ReadCommand(errbuf, sizeof(errbuf), SX12XX_Radio_1);
+    hal.WaitOnBusy(SX12XX_Radio_1);
+    DBGLN("LR1121 GET_ERRORS stat=0x%02X errors=0x%02X%02X", errbuf[0], errbuf[1], errbuf[2]);
+#endif
 
     return true;
 }
@@ -848,10 +871,11 @@ int LR1121Driver::BeginUpdate(const SX12XX_Radio_Number_t radioNumber, const uin
     DBGLN("Reboot 1121 to bootloader mode");
     uint8_t mode = 3;
     hal.WriteCommand(LR11XX_SYSTEM_REBOOT_OC, &mode, 1, radioNumber);
-    while(!hal.WaitOnBusy(radioNumber))
+    for (int _t = 0; !hal.WaitOnBusy(radioNumber); _t++)
     {
         DBGLN("Waiting...");
         delay(10);
+        if (_t > 150) { DBGLN("BL-reboot TIMEOUT radio #%d", radioNumber); return -1; } // don't hang forever
     }
 
     // Ensure we're in BL mode

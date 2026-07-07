@@ -49,17 +49,21 @@ void LR1121Hal::init()
     }
 
 #ifdef PLATFORM_ESP32
-    SPIEx.begin(GPIO_PIN_SCK, GPIO_PIN_MISO, GPIO_PIN_MOSI, GPIO_PIN_NSS); // sck, miso, mosi, ss (ss can be any GPIO)
+    SPIEx.begin(GPIO_PIN_SCK, GPIO_PIN_MISO, GPIO_PIN_MOSI, GPIO_PIN_NSS); // sck, miso, mosi, ss
     gpio_pullup_en((gpio_num_t)GPIO_PIN_MISO);
     SPIEx.setFrequency(16000000);
-    SPIEx.setHwCs(true);
+    // The ESP32 hardware SPI chip-select does not reliably drive RTC-domain pads (e.g. GPIO0 =
+    // XTAL_32K_P, radio-1 NSS on OpenRX-Gemini) — it reads back garbage/0xFF. Drive the selects in
+    // software instead. begin() above still sets GPIO0 up for the SPI subsystem; we then reclaim it.
+    SPIEx.setHwCs(false);
+    SPIEx.setSoftwareCS(GPIO_PIN_NSS, GPIO_PIN_NSS_2 != UNDEF_PIN ? GPIO_PIN_NSS_2 : -1);
+    pinMode(GPIO_PIN_NSS, OUTPUT);
+    digitalWrite(GPIO_PIN_NSS, HIGH);
     if (GPIO_PIN_NSS_2 != UNDEF_PIN)
     {
         pinMode(GPIO_PIN_NSS_2, OUTPUT);
         digitalWrite(GPIO_PIN_NSS_2, HIGH);
-        spiAttachSS(SPIEx.bus(), 1, GPIO_PIN_NSS_2);
     }
-    spiEnableSSPins(SPIEx.bus(), SX12XX_Radio_All);
 #elif defined(PLATFORM_ESP8266)
     DBGLN("PLATFORM_ESP8266");
     SPIEx.begin();
@@ -99,13 +103,24 @@ void LR1121Hal::reset(bool bootloader)
             pinMode(GPIO_PIN_RST_2, OUTPUT);
             digitalWrite(GPIO_PIN_RST_2, LOW);
         }
-        delay(1);
+        delay(20);
         digitalWrite(GPIO_PIN_RST, HIGH);
         if (GPIO_PIN_RST_2 != UNDEF_PIN)
         {
             digitalWrite(GPIO_PIN_RST_2, HIGH);
         }
-        delay(300); // LR1121 busy is high for 230ms after reset.  The WaitOnBusy timeout is only 1ms.  So this long delay is required.
+        delay(500);
+        // Radio-1's NRESET is on an ESP32-C3 strapping pad (GPIO2, with a pull-up). It does NOT come
+        // up on the first reset at power-on — it sits with BUSY floating (not running). A SECOND,
+        // standalone reset of radio-1 ONLY (leaving radio-2 running), once the supply has settled,
+        // reliably brings it up (verified on OpenRX-Gemini: radio-1 BUSY goes floating -> driven).
+        if (!bootloader)
+        {
+            digitalWrite(GPIO_PIN_RST, LOW);
+            delay(20);
+            digitalWrite(GPIO_PIN_RST, HIGH);
+            delay(500);
+        }
         if (bootloader)
         {
             pinMode(GPIO_PIN_BUSY, INPUT);

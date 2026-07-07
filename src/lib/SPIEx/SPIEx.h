@@ -47,7 +47,22 @@ public:
      */
     void inline ICACHE_RAM_ATTR write(uint8_t cs_mask, uint8_t * data, uint32_t size) { _transfer(cs_mask, data, size, false); }
 
+    /**
+     * @brief Enable software (bit-banged) chip-select instead of the SPI peripheral's hardware CS.
+     *
+     * The ESP32 hardware SPI chip-select does not reliably drive RTC-domain pads (e.g. GPIO0 =
+     * XTAL_32K_P). When a radio's NSS is on such a pin the hardware CS never asserts and the device
+     * reads back 0xFF. Providing the CS GPIOs here makes _transfer drive them with digitalWrite.
+     * Pass -1 for an unused select. Default (both -1) keeps the hardware-CS behaviour unchanged.
+     *
+     * @param cs0 GPIO for CS bit0 (SX12XX_Radio_1), or -1
+     * @param cs1 GPIO for CS bit1 (SX12XX_Radio_2), or -1
+     */
+    void setSoftwareCS(int8_t cs0, int8_t cs1) { _swCs0 = cs0; _swCs1 = cs1; }
+
 private:
+    int8_t _swCs0 = -1;
+    int8_t _swCs1 = -1;
     void _transfer(uint8_t cs_mask, uint8_t *data, uint32_t size, bool reading);
 };
 

@@ -11,9 +11,19 @@ void ICACHE_RAM_ATTR SPIExClass::_transfer(uint8_t cs_mask, uint8_t *data, uint3
     // wait for SPI to become non-busy
     while(spi->cmd.usr) {}
 
-    // Set the CS pins which we want controlled by the SPI module for this operation
-    spiDisableSSPins(bus(), ~cs_mask);
-    spiEnableSSPins(bus(), cs_mask);
+    const bool swcs = (_swCs0 >= 0 || _swCs1 >= 0);
+    if (swcs)
+    {
+        // Software chip-select: assert the requested NSS line(s) low ourselves.
+        if ((cs_mask & 0b01) && _swCs0 >= 0) digitalWrite(_swCs0, LOW);
+        if ((cs_mask & 0b10) && _swCs1 >= 0) digitalWrite(_swCs1, LOW);
+    }
+    else
+    {
+        // Set the CS pins which we want controlled by the SPI module for this operation
+        spiDisableSSPins(bus(), ~cs_mask);
+        spiEnableSSPins(bus(), cs_mask);
+    }
 
 #if defined(PLATFORM_ESP32_S3) || defined(PLATFORM_ESP32_C3)
     spi->ms_dlen.ms_data_bitlen = (size*8)-1;
@@ -46,6 +56,18 @@ void ICACHE_RAM_ATTR SPIExClass::_transfer(uint8_t cs_mask, uint8_t *data, uint3
         {
             wordsBuf[i] = spi->data_buf[i]; //copy spi fifo to buffer
         }
+    }
+    else if (swcs)
+    {
+        // With software CS we must wait for the transfer to finish before releasing NSS,
+        // otherwise the last bits are lost (hardware CS de-asserts on completion for us).
+        while(spi->cmd.usr) {}
+    }
+
+    if (swcs)
+    {
+        if ((cs_mask & 0b01) && _swCs0 >= 0) digitalWrite(_swCs0, HIGH);
+        if ((cs_mask & 0b10) && _swCs1 >= 0) digitalWrite(_swCs1, HIGH);
     }
 #elif defined(PLATFORM_ESP8266)
     // we support only one hardware controlled CS pin, so theres nothing to do to configure it at this point

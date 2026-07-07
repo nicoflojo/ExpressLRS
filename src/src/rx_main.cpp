@@ -1368,10 +1368,12 @@ static void setupSerial()
     }
 
 #if defined(DEBUG_ENABLED)
-#if defined(PLATFORM_ESP32_S3) || defined(PLATFORM_ESP32_C3)
+#if defined(PLATFORM_ESP32_S3)
     USBSerial.begin(460800);
     BackpackOrLogStrm = &USBSerial;
 #else
+    // C3 (OpenRX): keep debug on UART0 (Serial). The C3 boards don't break out native USB, and on
+    // the Gemini USBSerial.begin() reclaims GPIO18/19 (radio_dio1_2 + LED). UART0 is CH340-readable.
     BackpackOrLogStrm = &Serial;
 #endif
 #else
